@@ -198,6 +198,19 @@ button.quiet:hover { color: var(--ink); }
   box-shadow: 0 0 0 2px var(--paper);
 }
 
+button.history-toggle {
+  margin-left: 0.6rem;
+  padding: 0.1rem 0.5rem;
+  font-size: 0.75rem;
+}
+
+/* Chart.js sizes its canvas to the container, so the container fixes the height. */
+.chart {
+  position: relative;
+  height: 180px;
+  margin-top: 1rem;
+}
+
 .scale-labels {
   display: flex;
   justify-content: space-between;
