@@ -31,7 +31,7 @@ def home_data(store):
             ),
         )
 
-    def add_draw(user_id, tested_at, value):
+    def add_draw(user_id, tested_at, value, markers=("a", "b", "c"), ranges=ranges):
         store.put(
             f"results:{user_id}",
             tested_at,
@@ -46,7 +46,7 @@ def home_data(store):
                         status="good",
                         ranges=ranges,
                     )
-                    for marker_id in ("a", "b", "c")
+                    for marker_id in markers
                 ],
             ),
         )
@@ -65,7 +65,7 @@ def test_home_without_draws(signed_in, home_data):
     response = signed_in.get("/api/home")
     assert response.status_code == 200
     assert response.json() == {
-        "data": {"results": []},
+        "data": {"results": [], "history": {}},
         "meta": {"count": 0, "categories": [], "tested_at": None},
     }
 
@@ -104,6 +104,38 @@ def test_home_returns_latest_draw_with_definitions_and_stored_ranges(
     assert zinc["ranges"]["optimal"] == {"min": 10, "max": 20}
 
 
+def test_home_history_is_chronological_with_each_draws_own_ranges(signed_in, home_data):
+    older = Ranges(
+        optimal={"min": 10, "max": 18},
+        good={"min": 5, "max": 25},
+        improve={"min": 0, "max": 30},
+    )
+    home_data("user-1", "2026-09-10T09:00:00", 22)
+    home_data("user-1", "2026-09-01T09:00:00", 12, ranges=older)
+
+    history = signed_in.get("/api/home").json()["data"]["history"]
+    assert sorted(history) == ["a", "b", "c"]
+    first, second = history["a"]
+    assert first == {
+        "tested_at": "2026-09-01T09:00:00",
+        "value": 12,
+        "status": "good",
+        "ranges": older.model_dump(),
+    }
+    assert second["tested_at"] == "2026-09-10T09:00:00"
+    assert second["ranges"]["optimal"] == {"min": 10, "max": 20}
+
+
+def test_home_history_skips_draws_that_did_not_measure_a_marker(signed_in, home_data):
+    home_data("user-1", "2026-09-01T09:00:00", 12)
+    home_data("user-1", "2026-09-10T09:00:00", 22, markers=("a", "b"))
+
+    body = signed_in.get("/api/home").json()["data"]
+    assert [p["tested_at"] for p in body["history"]["c"]] == ["2026-09-01T09:00:00"]
+    assert len(body["history"]["a"]) == 2
+    assert {r["biomarker_id"] for r in body["results"]} == {"a", "b"}
+
+
 def test_home_only_returns_the_signed_in_members_results(client, home_data):
     home_data("user-1", "2026-09-10T09:00:00", 12)
     home_data("user-2", "2026-09-11T09:00:00", 24)
@@ -114,6 +146,7 @@ def test_home_only_returns_the_signed_in_members_results(client, home_data):
         assert client.post("/api/auth/login", json={"email": email}).status_code == 200
         response = client.get("/api/home")
         assert response.status_code == 200
-        results = response.json()["data"]["results"]
-        assert len(results) == 3
-        assert all(r["value"] == value for r in results)
+        body = response.json()["data"]
+        assert len(body["results"]) == 3
+        assert all(r["value"] == value for r in body["results"])
+        assert all(p["value"] == value for p in body["history"]["a"])

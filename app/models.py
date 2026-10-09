@@ -112,8 +112,18 @@ class OkPayload(BaseModel):
     ok: bool
 
 
+class HistoryPoint(BaseModel):
+    """One draw's reading of a marker, with the status and ranges recorded then."""
+
+    tested_at: str
+    value: float
+    status: str
+    ranges: Ranges
+
+
 class HomePayload(BaseModel):
     results: list[BiomarkerView]
+    history: dict[str, list[HistoryPoint]]
 
 
 class ReadingBody(BaseModel):

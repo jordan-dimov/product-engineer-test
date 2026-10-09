@@ -6,6 +6,7 @@ from ..models import (
     BiomarkerListPayload,
     BiomarkerView,
     Envelope,
+    HistoryPoint,
     HomePayload,
     Member,
     ResultsDocument,
@@ -25,26 +26,33 @@ def definitions(store: Store) -> dict[str, BiomarkerDefinition]:
     }
 
 
-def latest_results(
+def member_results(
     store: Store, user_id: str
-) -> tuple[list[BiomarkerView], str | None]:
-    """Every biomarker with this member's most recent value.
+) -> tuple[list[BiomarkerView], dict[str, list[HistoryPoint]], str | None]:
+    """Latest values and per-marker history from one query over a member's draws.
 
     One partition per member, one document per draw, sorted by ISO timestamp. So
-    the last sort key in the partition is the latest draw.
-
-    Note what this throws away. Every earlier draw is sitting in the same
-    partition and nothing here looks at it.
+    the query yields draws chronologically and the last one is the latest. Each
+    history point carries the status and ranges recorded at its draw; nothing is
+    recomputed against current definitions.
     """
-    partition = f"results:{user_id}"
-    sort_keys = list(store.keys(partition))
-    if not sort_keys:
-        return [], None
+    draws = [draw for _sk, draw in store.query(f"results:{user_id}", ResultsDocument)]
+    if not draws:
+        return [], {}, None
 
-    draw = store.get(partition, sort_keys[-1], ResultsDocument)
-    if draw is None:
-        return [], None
+    history: dict[str, list[HistoryPoint]] = {}
+    for draw in draws:
+        for result in draw.results:
+            history.setdefault(result.biomarker_id, []).append(
+                HistoryPoint(
+                    tested_at=draw.tested_at,
+                    value=result.value,
+                    status=result.status,
+                    ranges=result.ranges,
+                )
+            )
 
+    draw = draws[-1]
     defs = definitions(store)
 
     views = []
@@ -66,14 +74,14 @@ def latest_results(
         )
 
     views.sort(key=lambda v: (v.category, v.name))
-    return views, draw.tested_at
+    return views, history, draw.tested_at
 
 
 @router.get("/biomarkers", response_model=Envelope[BiomarkerListPayload])
 def list_biomarkers(
     member: Member = Depends(current_user), store: Store = Depends(get_store)
 ):
-    results, _tested_at = latest_results(store, member.id)
+    results, _history, _tested_at = member_results(store, member.id)
     return Envelope(
         data=BiomarkerListPayload(results=results),
         meta={
@@ -90,10 +98,10 @@ def home(member: Member = Depends(current_user), store: Store = Depends(get_stor
     Budget: defined and measured by scripts/bench.py.
     Whatever you add to this screen, it has to still pass when you are done.
     """
-    results, tested_at = latest_results(store, member.id)
+    results, history, tested_at = member_results(store, member.id)
 
     return Envelope(
-        data=HomePayload(results=results),
+        data=HomePayload(results=results, history=history),
         meta={
             "count": len(results),
             "categories": sorted({r.category for r in results}),
