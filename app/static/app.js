@@ -2,6 +2,12 @@ const el = (id) => document.getElementById(id);
 
 const BAND_ORDER = ["optimal", "good", "improve"];
 const BAND_LABEL = { optimal: "Optimal", good: "Good", improve: "Needs work" };
+/* DailyMetrics field, chart title and y axis unit for each wearable metric. */
+const METRICS = [
+  ["resting_hr_bpm", "Resting heart rate", "bpm"],
+  ["steps", "Steps", "steps"],
+  ["sleep_efficiency_pct", "Sleep efficiency", "%"],
+];
 /* --optimal and --good from styles.css, translucent, for the chart bands. */
 const BAND_FILL = { optimal: "rgb(47 111 98 / 0.2)", good: "rgb(168 130 60 / 0.2)" };
 
@@ -17,8 +23,11 @@ async function api(path, options = {}) {
   return body;
 }
 
+/* Draw timestamps and wearable days are both shown as a calendar date. Parsing
+   the date part as local midnight keeps a date-only string from being read as
+   UTC and shifting a day in western timezones. */
 function formatDate(iso) {
-  return new Date(iso).toLocaleDateString(undefined, {
+  return new Date(`${iso.slice(0, 10)}T00:00`).toLocaleDateString(undefined, {
     day: "numeric",
     month: "long",
     year: "numeric",
@@ -164,6 +173,56 @@ function renderResults(results, history) {
   }
 }
 
+/* One chart per metric over the 30 days the server returned. A day without a
+   value is a gap in the line. A metric with no value at all is a line of text:
+   the provider sent data and never included it, or nothing arrived at all. */
+function renderWearables(wearables) {
+  const root = el("wearables");
+  root.hidden = !wearables;
+  root.replaceChildren();
+  if (!wearables) return;
+
+  const { provider, days } = wearables;
+  const heading = document.createElement("h2");
+  heading.className = "category";
+  heading.textContent = "wearables";
+  const lede = document.createElement("p");
+  lede.className = "lede";
+  lede.textContent = `From ${provider}, 30 days to ${formatDate(days.at(-1).date)}`;
+  root.append(heading, lede);
+
+  const labels = days.map((d) => formatDate(d.date));
+  for (const [field, title, unit] of METRICS) {
+    const block = document.createElement("article");
+    block.className = "marker";
+    block.innerHTML = `
+      <div class="marker-head">
+        <span class="marker-name"></span><span class="marker-unit"></span>
+      </div>
+    `;
+    block.querySelector(".marker-name").textContent = title;
+    block.querySelector(".marker-unit").textContent = unit;
+    root.append(block);
+
+    const values = days.map((d) => d[field]);
+    if (values.every((v) => v === null)) {
+      const empty = document.createElement("p");
+      empty.className = "lede";
+      empty.textContent = days.some((d) => d.upload_id)
+        ? `Not reported by ${provider}`
+        : "No data in this period";
+      block.append(empty);
+      continue;
+    }
+    const chart = document.createElement("div");
+    chart.className = "chart";
+    chart.innerHTML = "<canvas></canvas>";
+    block.append(chart);
+    const series = [{ label: title, data: values, borderColor: "#1b1f1d" }];
+    lineChart(chart.firstChild, labels, series, unit);
+  }
+}
+
 async function showDashboard(user) {
   el("signin").hidden = true;
   el("dashboard").hidden = false;
@@ -171,6 +230,7 @@ async function showDashboard(user) {
 
   const { data, meta } = await api("/api/home");
   renderResults(data.results, data.history);
+  renderWearables(data.wearables);
 
   const latest = meta.tested_at || data.results[0]?.tested_at;
   el("drawn").textContent = latest ? `Drawn ${formatDate(latest)}` : "";
