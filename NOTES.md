@@ -6,6 +6,7 @@
 - The stored status is displayed as is, even where it disagrees with its own stored ranges. Changing what a member was told at the time is a product decision, not a display fix.
 - History is served on `GET /api/home` keyed by biomarker id, chronological, with one point per draw that measured the marker. Partial panels simply have fewer points.
 - The wearable window is the 30 calendar days ending on the member's latest delivery, not today, so a member whose device stopped syncing still sees their last month rather than an empty chart.
+- Wearable charts leave a day without a value as a gap in the line rather than bridging it, so a missing delivery, a null field and a corrected day all read truthfully. A metric that is null on every day of the window is a line of text instead of an empty chart: "Not reported by {provider}" when deliveries exist (whoop steps), "No data in this period" otherwise.
 - The history chart is opened per marker on demand, so the page does not build thirty charts up front. The optimal and good bands are drawn from the ranges recorded at each draw and held until the next draw, so a changed range shows as a step at the draw that introduced it. A marker with one draw shows a single point; its bands are already on the scale above the chart.
 
 ## Storage layout
