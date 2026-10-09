@@ -76,6 +76,17 @@ class ResultsDocument(BaseModel):
     results: list[BiomarkerResult]
 
 
+class DailyMetrics(BaseModel):
+    """pk=f"wearable_day:{user_id}", sk=date: one day's metrics, null if unreported."""
+
+    date: date
+    provider: str
+    upload_id: str | None
+    resting_hr_bpm: float | None = None
+    steps: int | None = None
+    sleep_efficiency_pct: float | None = None
+
+
 # -------------------------------------------------------- response & resquest models
 
 
@@ -121,9 +132,17 @@ class HistoryPoint(BaseModel):
     ranges: Ranges
 
 
+class WearablesPayload(BaseModel):
+    """Thirty days ending on the latest delivery; days without one carry nulls."""
+
+    provider: str
+    days: list[DailyMetrics]
+
+
 class HomePayload(BaseModel):
     results: list[BiomarkerView]
     history: dict[str, list[HistoryPoint]]
+    wearables: WearablesPayload | None
 
 
 class ReadingBody(BaseModel):
@@ -179,17 +198,6 @@ class WearableBody(BaseModel):
     provider: str
     member: WearableMember
     data: WearableDay
-
-
-class DailyMetrics(BaseModel):
-    """pk=f"wearable_day:{user_id}", sk=date: one day's metrics, null if unreported."""
-
-    date: date
-    provider: str
-    upload_id: str | None
-    resting_hr_bpm: float | None = None
-    steps: int | None = None
-    sleep_efficiency_pct: float | None = None
 
 
 class WearablePayload(BaseModel):

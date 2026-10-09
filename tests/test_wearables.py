@@ -1,7 +1,10 @@
 """Task 2 tests: ingest through HTTP, checked against the store and the home screen."""
 
 import json
+import logging
 from pathlib import Path
+
+import pytest
 
 from app.models import DailyMetrics
 
@@ -18,6 +21,15 @@ EMAILS = {
 def delivery(user_id, name):
     """One fixture file, e.g. delivery("user-3", "2026-07-17_r2")."""
     return json.loads((WEARABLES / user_id / f"{name}.json").read_text())
+
+
+@pytest.fixture(autouse=True)
+def no_wearables(store):
+    """dev.db may already hold the imported fixtures; every test starts from none."""
+    for user_id in EMAILS:
+        for partition in (f"wearable_day:{user_id}", f"wearable_upload:{user_id}"):
+            for key in list(store.keys(partition)):
+                store.delete(partition, key)
 
 
 def sign_in(client, user_id):
@@ -86,8 +98,39 @@ def test_replaying_a_delivery_is_idempotent(client, store):
     assert list(store.keys("wearable_upload:user-1")) == ["2026-08-31#ou_20260831"]
 
 
-def test_home_after_ingest(client):
+def test_home_fills_30_days_ending_on_the_latest_delivery(client):
+    for name in ("2026-08-01", "2026-08-02", "2026-08-31"):
+        client.post("/api/users/user-1/wearables", json=delivery("user-1", name))
+
+    wearables = sign_in(client, "user-1").get("/api/home").json()["data"]["wearables"]
+    assert wearables["provider"] == "oura"
+    days = wearables["days"]
+    assert len(days) == 30
+    assert [d["date"] for d in days][::29] == ["2026-08-02", "2026-08-31"]
+    assert days[0]["upload_id"] == "ou_20260802"
+    assert days[1] == {
+        "date": "2026-08-03",
+        "provider": "oura",
+        "upload_id": None,
+        "resting_hr_bpm": None,
+        "steps": None,
+        "sleep_efficiency_pct": None,
+    }
+
+
+def test_home_only_returns_the_signed_in_members_wearables(client):
     client.post("/api/users/user-1/wearables", json=delivery("user-1", "2026-08-31"))
-    response = sign_in(client, "user-1").get("/api/home")
-    assert response.status_code == 200
-    assert set(response.json()) == {"data", "meta"}
+    home = sign_in(client, "user-2").get("/api/home").json()["data"]
+    assert home["wearables"] is None
+
+
+def test_home_makes_five_store_reads(client, caplog):
+    client.post("/api/users/user-1/wearables", json=delivery("user-1", "2026-08-31"))
+    sign_in(client, "user-1")
+    caplog.set_level(logging.INFO)
+    caplog.clear()
+
+    assert client.get("/api/home").status_code == 200
+    # get user (session), query results, query biomarker definitions,
+    # keys wearable_day (latest date), query wearable_day (the 30 day window).
+    assert sum(r.getMessage().startswith("store:") for r in caplog.records) == 5
