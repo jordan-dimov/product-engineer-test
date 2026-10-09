@@ -2,6 +2,8 @@ const el = (id) => document.getElementById(id);
 
 const BAND_ORDER = ["optimal", "good", "improve"];
 const BAND_LABEL = { optimal: "Optimal", good: "Good", improve: "Needs work" };
+/* --optimal and --good from styles.css, translucent, for the chart bands. */
+const BAND_FILL = { optimal: "rgb(47 111 98 / 0.2)", good: "rgb(168 130 60 / 0.2)" };
 
 async function api(path, options = {}) {
   const res = await fetch(path, {
@@ -40,7 +42,25 @@ function scaleFor(ranges) {
   return { bands, low, high, span };
 }
 
-function renderMarker(result) {
+/* The only chart code in the app. A line per dataset, gaps left open, unit on
+   the y axis; hovering a date lists every dataset's value there. */
+function lineChart(canvas, labels, datasets, unit) {
+  return new Chart(canvas, {
+    type: "line",
+    data: { labels, datasets },
+    options: {
+      animation: false,
+      responsive: true,
+      maintainAspectRatio: false,
+      spanGaps: false,
+      interaction: { mode: "index", intersect: false },
+      scales: { y: { title: { display: true, text: unit } } },
+      plugins: { legend: { display: false } },
+    },
+  });
+}
+
+function renderMarker(result, points) {
   const { bands, low, high, span } = scaleFor(result.ranges);
   const offset = Math.min(100, Math.max(0, ((result.value - low) / span) * 100));
 
@@ -48,7 +68,10 @@ function renderMarker(result) {
   node.className = "marker";
   node.innerHTML = `
     <div class="marker-head">
-      <span class="marker-name"></span>
+      <span>
+        <span class="marker-name"></span>
+        <button type="button" class="quiet history-toggle" aria-expanded="false"></button>
+      </span>
       <span>
         <span class="marker-value"></span><span class="marker-unit"></span>
         <span class="marker-status status-${result.status}"></span>
@@ -77,10 +100,46 @@ function renderMarker(result) {
     BAND_LABEL[result.status] ?? result.status;
   node.querySelector(".low").textContent = low;
   node.querySelector(".high").textContent = high;
+
+  /* The chart is built on the first click and toggled after that. Bands are
+     the optimal and good ranges recorded at each draw, held until the next
+     draw, so a changed range shows as a step. */
+  const toggle = node.querySelector(".history-toggle");
+  toggle.textContent = `History (${points.length})`;
+  let chart = null;
+  toggle.addEventListener("click", () => {
+    if (chart) {
+      chart.hidden = !chart.hidden;
+    } else {
+      chart = document.createElement("div");
+      chart.className = "chart";
+      chart.innerHTML = "<canvas></canvas>";
+      node.append(chart);
+      const datasets = [
+        { label: result.name, data: points.map((p) => p.value), borderColor: "#1b1f1d" },
+      ];
+      for (const band of ["optimal", "good"]) {
+        for (const edge of ["max", "min"]) {
+          datasets.push({
+            label: `${BAND_LABEL[band]} ${edge}`,
+            data: points.map((p) => p.ranges[band][edge]),
+            stepped: "before",
+            pointRadius: 0,
+            borderWidth: 0,
+            fill: edge === "max" ? "+1" : false,
+            backgroundColor: BAND_FILL[band],
+          });
+        }
+      }
+      const labels = points.map((p) => formatDate(p.tested_at));
+      lineChart(chart.firstChild, labels, datasets, result.unit);
+    }
+    toggle.setAttribute("aria-expanded", String(!chart.hidden));
+  });
   return node;
 }
 
-function renderResults(results) {
+function renderResults(results, history) {
   const root = el("results");
   root.replaceChildren();
 
@@ -101,7 +160,7 @@ function renderResults(results) {
       heading.textContent = category;
       root.append(heading);
     }
-    root.append(renderMarker(result));
+    root.append(renderMarker(result, history[result.biomarker_id]));
   }
 }
 
@@ -111,7 +170,7 @@ async function showDashboard(user) {
   el("whoami").textContent = user.name;
 
   const { data, meta } = await api("/api/home");
-  renderResults(data.results);
+  renderResults(data.results, data.history);
 
   const latest = meta.tested_at || data.results[0]?.tested_at;
   el("drawn").textContent = latest ? `Drawn ${formatDate(latest)}` : "";
