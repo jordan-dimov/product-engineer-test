@@ -9,6 +9,11 @@
 
 ## Storage layout
 
+- Wearables use two partitions per member. `wearable_day:{user_id}` holds one small `DailyMetrics` document per calendar date (provider, upload id, resting heart rate, steps, sleep efficiency, each nullable), so a 30 day window is one range query. `wearable_upload:{user_id}` holds every envelope exactly as received, keyed `{date}#{upload_id}`, so corrections are kept alongside the original. Both are written in one transaction. The home screen never reads the upload partition; a raw day is 70 to 86 KB and would blow the budget.
+- A repeated delivery for the same day replaces the day document, because the later file carries the corrected value and the earlier envelope is still on record. Replaying a file is idempotent. The response reports the upload id that was replaced.
+- The day is taken from `calendar_date` in the envelope, never derived from a sample timestamp (whoop timestamps are +01:00).
+- A missing or null field is stored as null, never zero. Whoop reports sleep efficiency as a fraction of one and is multiplied by 100; the provider decides that, not the magnitude of the value. Whoop reports no steps, so steps are null for that member.
+- An unknown provider is still stored: the envelope is kept and the day document has null metrics, so nothing is lost and the charts show gaps until a parser exists.
 - Biomarkers keep the existing layout: `results:{user_id}` with the ISO draw timestamp as sort key, one document per draw. The home screen reads the whole partition with one `query` and pivots it into latest values plus per-marker history in code. That is cheap while a member has a handful of draws; one marker's history still decodes every draw.
 
 ## What was left out and what comes next

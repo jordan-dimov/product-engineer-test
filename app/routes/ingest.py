@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from ..models import (
     BiomarkerDefinition,
     BiomarkerResult,
+    DailyMetrics,
     DrawBody,
     DrawPayload,
     DrawResultPayload,
@@ -13,6 +14,7 @@ from ..models import (
     WearablePayload,
 )
 from ..store import Store, get_store
+from ..wearables import daily_metrics
 
 # Ingest is unauthenticated for this exercise. Production endpoints must
 # authenticate the sender and authorize writes to the requested member.
@@ -29,11 +31,42 @@ def ingest_member(user_id: str, store: Store = Depends(get_store)) -> Member:
 
 
 @router.post("/wearables", response_model=Envelope[WearablePayload])
-def add_wearable_day(body: WearableBody, member: Member = Depends(ingest_member)):
-    """Receive one provider day. Persistence is part of task 2."""
+def add_wearable_day(
+    body: WearableBody,
+    member: Member = Depends(ingest_member),
+    store: Store = Depends(get_store),
+):
+    """Receive one provider day.
+
+    The day document is keyed by calendar date, so a later delivery for the same
+    day replaces it. The envelope is kept as received under its upload id, so
+    every delivery, including corrections, stays on record.
+    """
     if body.member.reference_id != member.id:
         raise HTTPException(status_code=400, detail="Payload belongs to another member")
-    return Envelope(data=WearablePayload(stored=False))
+
+    day = daily_metrics(body)
+    days = f"wearable_day:{member.id}"
+    sk = day.date.isoformat()
+    previous = store.get(days, sk, DailyMetrics)
+    store.put_many(
+        [
+            (days, sk, day),
+            (
+                f"wearable_upload:{member.id}",
+                f"{sk}#{day.upload_id}",
+                body.model_dump(mode="json"),
+            ),
+        ]
+    )
+    return Envelope(
+        data=WearablePayload(
+            stored=True,
+            calendar_date=day.date,
+            upload_id=body.data.upload_id,
+            replaced_upload_id=previous.upload_id if previous else None,
+        )
+    )
 
 
 def band_for(value: float, definition: BiomarkerDefinition) -> str:
