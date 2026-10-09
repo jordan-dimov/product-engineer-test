@@ -1,3 +1,5 @@
+from datetime import date, timedelta
+
 from fastapi import APIRouter, Depends
 
 from ..auth import current_user
@@ -5,11 +7,13 @@ from ..models import (
     BiomarkerDefinition,
     BiomarkerListPayload,
     BiomarkerView,
+    DailyMetrics,
     Envelope,
     HistoryPoint,
     HomePayload,
     Member,
     ResultsDocument,
+    WearablesPayload,
 )
 from ..store import Store, get_store
 
@@ -77,6 +81,39 @@ def member_results(
     return views, history, draw.tested_at
 
 
+def wearables(store: Store, user_id: str) -> WearablesPayload | None:
+    """The 30 calendar days ending on the member's latest wearable date.
+
+    `keys` finds the latest date without decoding anything, then one range query
+    reads the window. Days with no delivery get a document with null metrics, so
+    the chart's x axis is a plain calendar and gaps are gaps.
+    """
+    partition = f"wearable_day:{user_id}"
+    dates = list(store.keys(partition))
+    if not dates:
+        return None
+
+    end = date.fromisoformat(dates[-1])
+    start = end - timedelta(days=29)
+    stored = {
+        day.date: day
+        for _sk, day in store.query(
+            partition,
+            DailyMetrics,
+            start=start.isoformat(),
+            end=(end + timedelta(days=1)).isoformat(),
+        )
+    }
+    provider = stored[end].provider
+    return WearablesPayload(
+        provider=provider,
+        days=[
+            stored.get(day) or DailyMetrics(date=day, provider=provider, upload_id=None)
+            for day in (start + timedelta(days=i) for i in range(30))
+        ],
+    )
+
+
 @router.get("/biomarkers", response_model=Envelope[BiomarkerListPayload])
 def list_biomarkers(
     member: Member = Depends(current_user), store: Store = Depends(get_store)
@@ -101,7 +138,9 @@ def home(member: Member = Depends(current_user), store: Store = Depends(get_stor
     results, history, tested_at = member_results(store, member.id)
 
     return Envelope(
-        data=HomePayload(results=results, history=history),
+        data=HomePayload(
+            results=results, history=history, wearables=wearables(store, member.id)
+        ),
         meta={
             "count": len(results),
             "categories": sorted({r.category for r in results}),

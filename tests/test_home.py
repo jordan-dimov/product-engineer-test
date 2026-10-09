@@ -5,8 +5,9 @@ from app.models import BiomarkerDefinition, BiomarkerResult, Ranges, ResultsDocu
 
 @pytest.fixture
 def home_data(store):
-    for key in list(store.keys("results:user-1")):
-        store.delete("results:user-1", key)
+    for partition in ("results:user-1", "wearable_day:user-1"):
+        for key in list(store.keys(partition)):
+            store.delete(partition, key)
     ranges = Ranges(
         optimal={"min": 10, "max": 20},
         good={"min": 5, "max": 25},
@@ -65,7 +66,7 @@ def test_home_without_draws(signed_in, home_data):
     response = signed_in.get("/api/home")
     assert response.status_code == 200
     assert response.json() == {
-        "data": {"results": [], "history": {}},
+        "data": {"results": [], "history": {}, "wearables": None},
         "meta": {"count": 0, "categories": [], "tested_at": None},
     }
 
